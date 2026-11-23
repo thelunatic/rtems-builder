@@ -1,0 +1,4 @@
+[submodule "ci-scripts"]
+	path = ci-scripts
+	url = https://github.com/thelunatic/ci-scripts.git
+	branch = rtems_builder
