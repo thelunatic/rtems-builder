@@ -2,11 +2,15 @@ name: RTEMS 6
 
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
+  schedule:
+  - cron: '0 6 * * 0'
 
 jobs:
   build-rtems:
     name: RTEMS 6 i386/pc686 toolchain
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v7
@@ -59,6 +63,7 @@ jobs:
   build-base:
     name: Base 7.0 RTEMS-pc686-qemu@6
     needs: build-rtems
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-24.04
     env:
       CMP: gcc
@@ -66,6 +71,8 @@ jobs:
       BASE: SELF
       CI_CROSS_TARGETS: RTEMS-pc686-qemu@6
       SETUP_PATH: ../ci-scripts
+      RSB_REPOURL: ${{ github.server_url }}/${{ github.repository }}
+      RSB_BUILD: latest
     steps:
     - uses: actions/checkout@v7
       with:
@@ -77,9 +84,11 @@ jobs:
         submodules: true
         path: epics-base
     - uses: actions/download-artifact@v7
+      if: needs.build-rtems.result == 'success'
       with:
         name: pc686-rtems6.tar.xz
     - name: Install toolchain
+      if: needs.build-rtems.result == 'success'
       run: sudo tar -C / -xmJ -f pc686-rtems6.tar.xz
     - name: Prepare and compile dependencies
       working-directory: epics-base
@@ -103,8 +112,8 @@ jobs:
 
   release:
     name: Publish pc686-rtems6.tar.xz
-    needs: [build-rtems, build-base]
-    if: startsWith(github.ref, 'refs/tags/6/')
+    needs: build-rtems
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -115,6 +124,9 @@ jobs:
     - name: Create release
       env:
         GH_TOKEN: ${{ github.token }}
-      run: >
-        gh release create "$GITHUB_REF_NAME" pc686-rtems6.tar.xz
-        --repo "$GITHUB_REPOSITORY" --generate-notes
+      run: |
+        if gh release view 6/latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          gh release delete 6/latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
+        fi
+        gh release create 6/latest pc686-rtems6.tar.xz \
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
