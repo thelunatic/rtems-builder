@@ -11,8 +11,8 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with:
-        repository: RTEMS/rtems-source-builder
-        ref: "6"
+        repository: thelunatic/rtems-source-builder
+        ref: 6_update_rtems
         fetch-depth: 0
         path: rtems-source-builder
     - name: "apt-get install"
