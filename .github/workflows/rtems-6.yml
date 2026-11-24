@@ -38,7 +38,15 @@ jobs:
       working-directory: rtems-source-builder/rtems
       run: >
         ../source-builder/sb-set-builder --prefix=/opt/rtems/6
-        --target=i386-rtems6 --with-rtems-bsp=i386/pc686 6/rtems-libbsd-fb14
+        --target=i386-rtems6 --with-rtems-bsp=i386/pc686
+        --log=rsb-libbsd.log 6/rtems-libbsd-fb14
+    - uses: actions/upload-artifact@v7
+      if: failure()
+      with:
+        name: rsb-report pc686-rtems6
+        path: |
+          rtems-source-builder/rtems/rsb-report-*.txt
+          rtems-source-builder/rtems/rsb-libbsd.log
     - name: Show compiler version
       run: /opt/rtems/6/bin/i386-rtems6-gcc --version
     - name: Pack toolchain
