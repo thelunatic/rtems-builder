@@ -1,0 +1,112 @@
+name: RTEMS 6
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-rtems:
+    name: RTEMS 6 i386/pc686 toolchain
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        repository: RTEMS/rtems-source-builder
+        ref: "6"
+        fetch-depth: 0
+        path: rtems-source-builder
+    - name: "apt-get install"
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install bison flex texinfo unzip python3-dev zlib1g-dev
+    - name: Check RSB host environment
+      working-directory: rtems-source-builder
+      run: ./source-builder/sb-check
+    - name: Create /opt/rtems/6
+      run: |
+        sudo mkdir -p /opt/rtems/6
+        sudo chown $(id -u):$(id -g) /opt/rtems/6
+    - name: Build i386 tools
+      working-directory: rtems-source-builder/rtems
+      run: ../source-builder/sb-set-builder --prefix=/opt/rtems/6 6/rtems-i386
+    - name: Build pc686 kernel
+      working-directory: rtems-source-builder/rtems
+      run: >
+        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
+        --target=i386-rtems6 --with-rtems-bsp=i386/pc686 6/rtems-kernel
+    - name: Build pc686 libbsd
+      working-directory: rtems-source-builder/rtems
+      run: >
+        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
+        --target=i386-rtems6 --with-rtems-bsp=i386/pc686 6/rtems-libbsd-fb14
+    - name: Show compiler version
+      run: /opt/rtems/6/bin/i386-rtems6-gcc --version
+    - name: Pack toolchain
+      run: tar -C / -cJf pc686-rtems6.tar.xz opt/rtems/6
+    - uses: actions/upload-artifact@v7
+      with:
+        name: pc686-rtems6.tar.xz
+        path: pc686-rtems6.tar.xz
+
+  build-base:
+    name: Base 7.0 RTEMS-pc686-qemu@6
+    needs: build-rtems
+    runs-on: ubuntu-24.04
+    env:
+      CMP: gcc
+      BCFG: default
+      BASE: SELF
+      CI_CROSS_TARGETS: RTEMS-pc686-qemu@6
+      SETUP_PATH: ../ci-scripts
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+    - uses: actions/checkout@v7
+      with:
+        repository: epics-base/epics-base
+        ref: "7.0"
+        submodules: true
+        path: epics-base
+    - uses: actions/download-artifact@v7
+      with:
+        name: pc686-rtems6.tar.xz
+    - name: Install toolchain
+      run: sudo tar -C / -xmJ -f pc686-rtems6.tar.xz
+    - name: Prepare and compile dependencies
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py prepare
+    - name: Build EPICS Base
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py build
+    - name: Run EPICS Base tests
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 15M test
+    - name: Upload tapfiles Artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: tapfiles RTEMS-pc686-qemu@6
+        path: 'epics-base/**/O.*/*.tap'
+    - name: Collect and show test results
+      if: ${{ always() }}
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 5M test-results
+
+  release:
+    name: Publish pc686-rtems6.tar.xz
+    needs: [build-rtems, build-base]
+    if: startsWith(github.ref, 'refs/tags/6/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v7
+      with:
+        name: pc686-rtems6.tar.xz
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: >
+        gh release create "$GITHUB_REF_NAME" pc686-rtems6.tar.xz
+        --repo "$GITHUB_REPOSITORY" --generate-notes
