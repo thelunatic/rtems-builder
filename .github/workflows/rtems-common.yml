@@ -15,15 +15,9 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     env:
-      CMP: gcc
-      BCFG: default
-      BASE: SELF
-      CI_CROSS_TARGETS: ${{ matrix.cross }}
-      TEST: ${{ matrix.test }}
-      SETUP_PATH: ../ci-scripts
       EPICS_TEST_IMPRECISE_TIMING: YES
       RSB_REPOURL: https://github.com/thelunatic/rtems-builder
-      RSB_BUILD: latest
+      RSB_BUILD: ${{ matrix.arch && format('{0}-{1}', matrix.arch, matrix.bsp) || 'latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,34 +39,59 @@ jobs:
 
           - name: "Ub-24 gcc + RT-6 pc686"
             cross: "RTEMS-pc686-qemu@6"
+            arch: i386
+            bsp: pc686
+
+          - name: "Ub-24 gcc + RT-6 beatnik"
+            cross: "RTEMS-beatnik@6"
+            arch: powerpc
+            bsp: beatnik
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 xilinx_zynq_a9_qemu"
+            cross: "RTEMS-xilinx_zynq_a9_qemu@6"
+            arch: arm
+            bsp: xilinx_zynq_a9_qemu
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 uC5282"
+            cross: "RTEMS-uC5282@6"
+            arch: m68k
+            bsp: uC5282
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 mvme2100"
+            cross: "RTEMS-mvme2100@6"
+            arch: powerpc
+            bsp: mvme2100
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 mvme2700"
+            cross: "RTEMS-mvme2700@6"
+            arch: powerpc
+            bsp: mvme2700
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 mvme5100"
+            cross: "RTEMS-mvme5100@6"
+            arch: powerpc
+            bsp: mvme5100
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 mvme3100"
+            cross: "RTEMS-mvme3100@6"
+            arch: powerpc
+            bsp: mvme3100
+            test: NO
     steps:
     - uses: actions/checkout@v7
       with:
         repository: thelunatic/rtems-builder
         submodules: true
-    - uses: actions/checkout@v7
+    - uses: ./.github/actions/epics-base
       with:
+        cross: ${{ matrix.cross }}
+        test: ${{ matrix.test }}
+        timeout: 60M
         repository: ${{ inputs.repository }}
         ref: ${{ inputs.ref }}
-        submodules: true
-        path: epics-base
-    - name: Prepare and compile dependencies
-      working-directory: epics-base
-      run: python ../ci-scripts/cue.py prepare
-    - name: Build EPICS Base
-      working-directory: epics-base
-      run: python ../ci-scripts/cue.py build
-    - name: Run EPICS Base tests
-      working-directory: epics-base
-      run: python ../ci-scripts/cue.py -T 60M test
-    - name: Upload tapfiles Artifact
-      if: ${{ always() }}
-      uses: actions/upload-artifact@v7
-      with:
-        name: tapfiles ${{ matrix.name }}
-        path: 'epics-base/**/O.*/*.tap'
-        if-no-files-found: ignore
-    - name: Collect and show test results
-      if: ${{ always() }}
-      working-directory: epics-base
-      run: python ../ci-scripts/cue.py -T 5M test-results
