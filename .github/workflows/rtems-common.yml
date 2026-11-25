@@ -1,0 +1,78 @@
+name: RTEMS Common
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        type: string
+        default: ''
+      ref:
+        type: string
+        default: ''
+
+jobs:
+  build-base:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    env:
+      CMP: gcc
+      BCFG: default
+      BASE: SELF
+      CI_CROSS_TARGETS: ${{ matrix.cross }}
+      TEST: ${{ matrix.test }}
+      SETUP_PATH: ../ci-scripts
+      EPICS_TEST_IMPRECISE_TIMING: YES
+      RSB_REPOURL: https://github.com/thelunatic/rtems-builder
+      RSB_BUILD: latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "Ub-24 gcc + RT-5.1 pc686"
+            cross: "RTEMS-pc686-qemu@5"
+
+          - name: "Ub-24 gcc + RT-5.1 beatnik"
+            cross: "RTEMS-beatnik@5"
+            test: NO
+
+          - name: "Ub-24 gcc + RT-5.1 xilinx_zynq_a9_qemu"
+            cross: "RTEMS-xilinx_zynq_a9_qemu@5"
+            test: NO
+
+          - name: "Ub-24 gcc + RT-5.1 uC5282"
+            cross: "RTEMS-uC5282@5"
+            test: NO
+
+          - name: "Ub-24 gcc + RT-6 pc686"
+            cross: "RTEMS-pc686-qemu@6"
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        repository: thelunatic/rtems-builder
+        submodules: true
+    - uses: actions/checkout@v7
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        submodules: true
+        path: epics-base
+    - name: Prepare and compile dependencies
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py prepare
+    - name: Build EPICS Base
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py build
+    - name: Run EPICS Base tests
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 60M test
+    - name: Upload tapfiles Artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: tapfiles ${{ matrix.name }}
+        path: 'epics-base/**/O.*/*.tap'
+        if-no-files-found: ignore
+    - name: Collect and show test results
+      if: ${{ always() }}
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 5M test-results

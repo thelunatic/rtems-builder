@@ -1,0 +1,154 @@
+name: RTEMS 5
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+  schedule:
+  - cron: '0 6 * * 0'
+
+jobs:
+  build-rtems:
+    name: RTEMS 5 ${{ matrix.arch }}/${{ matrix.bsp }} toolchain
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i386
+            bsp: pc686
+          - arch: powerpc
+            bsp: beatnik
+          - arch: arm
+            bsp: xilinx_zynq_a9_qemu
+          - arch: m68k
+            bsp: uC5282
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        repository: RTEMS/rtems-source-builder
+        ref: "5.1"
+        fetch-depth: 0
+        path: rtems-source-builder
+    - name: "apt-get install"
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install bison flex texinfo unzip python3-dev zlib1g-dev
+    - name: Check RSB host environment
+      working-directory: rtems-source-builder
+      run: ./source-builder/sb-check
+    - name: Create /opt/rtems/5
+      run: |
+        sudo mkdir -p /opt/rtems/5
+        sudo chown $(id -u):$(id -g) /opt/rtems/5
+    - name: Build ${{ matrix.arch }} tools
+      working-directory: rtems-source-builder/rtems
+      run: ../source-builder/sb-set-builder --prefix=/opt/rtems/5 5/rtems-${{ matrix.arch }}
+    - name: Build ${{ matrix.bsp }} kernel
+      working-directory: rtems-source-builder/rtems
+      run: >
+        ../source-builder/sb-set-builder --prefix=/opt/rtems/5
+        --target=${{ matrix.arch }}-rtems5 --with-rtems-bsp=${{ matrix.arch }}/${{ matrix.bsp }} 5/rtems-kernel
+    - uses: actions/upload-artifact@v7
+      if: failure()
+      with:
+        name: rsb-report ${{ matrix.bsp }}-rtems5
+        path: rtems-source-builder/rtems/rsb-report-*.txt
+    - name: Show compiler version
+      run: /opt/rtems/5/bin/${{ matrix.arch }}-rtems5-gcc --version
+    - name: Pack toolchain
+      run: tar -C / -cJf ${{ matrix.bsp }}-rtems5.tar.xz opt/rtems/5
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.bsp }}-rtems5.tar.xz
+        path: ${{ matrix.bsp }}-rtems5.tar.xz
+
+  build-base:
+    name: Base 7.0 ${{ matrix.cross }}
+    needs: build-rtems
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bsp: pc686
+            cross: RTEMS-pc686-qemu@5
+          - bsp: beatnik
+            cross: RTEMS-beatnik@5
+            test: NO
+          - bsp: xilinx_zynq_a9_qemu
+            cross: RTEMS-xilinx_zynq_a9_qemu@5
+            test: NO
+          - bsp: uC5282
+            cross: RTEMS-uC5282@5
+            test: NO
+    env:
+      CMP: gcc
+      BCFG: default
+      BASE: SELF
+      CI_CROSS_TARGETS: ${{ matrix.cross }}
+      TEST: ${{ matrix.test }}
+      SETUP_PATH: ../ci-scripts
+      RSB_REPOURL: ${{ github.server_url }}/${{ github.repository }}
+      RSB_BUILD: latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+    - uses: actions/checkout@v7
+      with:
+        repository: epics-base/epics-base
+        ref: "7.0"
+        submodules: true
+        path: epics-base
+    - uses: actions/download-artifact@v7
+      if: needs.build-rtems.result == 'success'
+      with:
+        name: ${{ matrix.bsp }}-rtems5.tar.xz
+    - name: Install toolchain
+      if: needs.build-rtems.result == 'success'
+      run: sudo tar -C / -xmJ -f ${{ matrix.bsp }}-rtems5.tar.xz
+    - name: Prepare and compile dependencies
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py prepare
+    - name: Build EPICS Base
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py build
+    - name: Run EPICS Base tests
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 15M test
+    - name: Upload tapfiles Artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: tapfiles ${{ matrix.cross }}
+        path: 'epics-base/**/O.*/*.tap'
+        if-no-files-found: ignore
+    - name: Collect and show test results
+      if: ${{ always() }}
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 5M test-results
+
+  release:
+    name: Publish *-rtems5.tar.xz
+    needs: [build-rtems, build-base]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v7
+      with:
+        pattern: '*-rtems5.tar.xz'
+        merge-multiple: true
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if gh release view 5/latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          gh release delete 5/latest --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
+        fi
+        gh release create 5/latest *-rtems5.tar.xz \
+          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes

@@ -112,7 +112,7 @@ jobs:
 
   release:
     name: Publish pc686-rtems6.tar.xz
-    needs: build-rtems
+    needs: [build-rtems, build-base]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
