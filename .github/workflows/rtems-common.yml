@@ -15,6 +15,12 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
     env:
+      CMP: gcc
+      BCFG: default
+      BASE: SELF
+      CI_CROSS_TARGETS: ${{ matrix.cross }}
+      TEST: ${{ matrix.test }}
+      SETUP_PATH: ../ci-scripts
       EPICS_TEST_IMPRECISE_TIMING: YES
       RSB_REPOURL: https://github.com/thelunatic/rtems-builder
       RSB_BUILD: ${{ matrix.arch && format('{0}-{1}', matrix.arch, matrix.bsp) || 'latest' }}
@@ -88,10 +94,29 @@ jobs:
       with:
         repository: thelunatic/rtems-builder
         submodules: true
-    - uses: ./.github/actions/epics-base
+    - uses: actions/checkout@v7
       with:
-        cross: ${{ matrix.cross }}
-        test: ${{ matrix.test }}
-        timeout: 60M
         repository: ${{ inputs.repository }}
         ref: ${{ inputs.ref }}
+        submodules: true
+        path: epics-base
+    - name: Prepare and compile dependencies
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py prepare
+    - name: Build EPICS Base
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py build
+    - name: Run EPICS Base tests
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 60M test
+    - name: Upload tapfiles Artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: tapfiles ${{ matrix.name }}
+        path: 'epics-base/**/O.*/*.tap'
+        if-no-files-found: ignore
+    - name: Collect and show test results
+      if: ${{ always() }}
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 5M test-results

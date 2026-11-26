@@ -1,0 +1,145 @@
+on:
+  workflow_call:
+    inputs:
+      arch:
+        type: string
+        required: true
+      bsp:
+        type: string
+        required: true
+      cross:
+        type: string
+        required: true
+      test:
+        type: string
+        default: ''
+
+jobs:
+  build-bsp:
+    name: RTEMS 6 ${{ inputs.arch }}/${{ inputs.bsp }} BSP
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        repository: thelunatic/rtems-source-builder
+        ref: 6_update_rtems
+        fetch-depth: 0
+        path: rtems-source-builder
+    - name: "apt-get install"
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install bison flex texinfo unzip python3-dev zlib1g-dev
+    - name: Check RSB host environment
+      working-directory: rtems-source-builder
+      run: ./source-builder/sb-check
+    - uses: actions/download-artifact@v7
+      with:
+        name: ${{ inputs.arch }}-rtems6.tar.xz
+    - name: Install ${{ inputs.arch }} tools
+      run: |
+        sudo tar -C / -xmJ -f ${{ inputs.arch }}-rtems6.tar.xz
+        sudo chown -R $(id -u):$(id -g) /opt/rtems/6
+    - name: Build ${{ inputs.bsp }} kernel
+      working-directory: rtems-source-builder/rtems
+      run: >
+        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
+        --target=${{ inputs.arch }}-rtems6 --with-rtems-bsp=${{ inputs.arch }}/${{ inputs.bsp }} 6/rtems-kernel
+    - name: Build ${{ inputs.bsp }} libbsd
+      if: inputs.arch != 'm68k'
+      working-directory: rtems-source-builder/rtems
+      run: >
+        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
+        --target=${{ inputs.arch }}-rtems6 --with-rtems-bsp=${{ inputs.arch }}/${{ inputs.bsp }}
+        --log=rsb-libbsd.log 6/rtems-libbsd-fb14
+    - uses: actions/upload-artifact@v7
+      if: failure()
+      with:
+        name: rsb-report ${{ inputs.bsp }}-rtems6
+        path: |
+          rtems-source-builder/rtems/rsb-report-*.txt
+          rtems-source-builder/rtems/rsb-libbsd.log
+    - name: Pack toolchain and BSP
+      run: tar -C / -cJf ${{ inputs.bsp }}-rtems6.tar.xz opt/rtems/6
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.bsp }}-rtems6.tar.xz
+        path: ${{ inputs.bsp }}-rtems6.tar.xz
+
+  build-base:
+    name: Base 7.0 ${{ inputs.cross }}
+    needs: build-bsp
+    runs-on: ubuntu-24.04
+    env:
+      CMP: gcc
+      BCFG: default
+      BASE: SELF
+      CI_CROSS_TARGETS: ${{ inputs.cross }}
+      TEST: ${{ inputs.test }}
+      SETUP_PATH: ../ci-scripts
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: true
+    - uses: actions/checkout@v7
+      with:
+        repository: epics-base/epics-base
+        ref: "7.0"
+        submodules: true
+        path: epics-base
+    - uses: actions/download-artifact@v7
+      with:
+        name: ${{ inputs.bsp }}-rtems6.tar.xz
+    - name: Install toolchain and BSP
+      run: sudo tar -C / -xmJ -f ${{ inputs.bsp }}-rtems6.tar.xz
+    - name: Prepare and compile dependencies
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py prepare
+    - name: Build EPICS Base
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py build
+    - name: Run EPICS Base tests
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 15M test
+    - name: Upload tapfiles Artifact
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: tapfiles ${{ inputs.cross }}
+        path: 'epics-base/**/O.*/*.tap'
+        if-no-files-found: ignore
+    - name: Collect and show test results
+      if: ${{ always() }}
+      working-directory: epics-base
+      run: python ../ci-scripts/cue.py -T 5M test-results
+
+  release:
+    name: Publish ${{ inputs.bsp }}-rtems6.tar.xz
+    needs: build-base
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v7
+      with:
+        name: ${{ inputs.bsp }}-rtems6.tar.xz
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! gh release view 6/${{ inputs.arch }}-${{ inputs.bsp }} --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          gh release create 6/${{ inputs.arch }}-${{ inputs.bsp }} ${{ inputs.bsp }}-rtems6.tar.xz \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
+          exit 0
+        fi
+        cp ${{ inputs.bsp }}-rtems6.tar.xz ${{ inputs.bsp }}-rtems6.tar.xz.$GITHUB_RUN_NUMBER
+        gh release upload 6/${{ inputs.arch }}-${{ inputs.bsp }} ${{ inputs.bsp }}-rtems6.tar.xz.$GITHUB_RUN_NUMBER \
+          --clobber --repo "$GITHUB_REPOSITORY"
+        gh release delete-asset 6/${{ inputs.arch }}-${{ inputs.bsp }} ${{ inputs.bsp }}-rtems6.tar.xz \
+          --yes --repo "$GITHUB_REPOSITORY" || true
+        gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+          --jq ".[] | select(.tag_name == \"6/${{ inputs.arch }}-${{ inputs.bsp }}\") | .assets[] | select(.name == \"${{ inputs.bsp }}-rtems6.tar.xz.$GITHUB_RUN_NUMBER\") | .id" \
+          | grep . \
+          | xargs -I{} gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/{}" -f name=${{ inputs.bsp }}-rtems6.tar.xz
+        gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/6/${{ inputs.arch }}-${{ inputs.bsp }}" \
+          -f sha="$GITHUB_SHA" -F force=true

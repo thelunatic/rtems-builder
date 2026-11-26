@@ -1,167 +1,122 @@
 name: RTEMS 6
 
 on:
-  push:
-    branches: ['**']
   workflow_dispatch:
   schedule:
   - cron: '0 6 * * 0'
 
 jobs:
-  build-rtems:
-    name: RTEMS 6 ${{ matrix.arch }} toolchain
-    if: github.event_name != 'push'
-    runs-on: ubuntu-24.04
+  build-rtems-i386:
+    uses: ./.github/workflows/rtems-6-arch.yml
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [i386, powerpc, arm, m68k]
-    steps:
-    - uses: actions/checkout@v7
-    - name: Download released ${{ matrix.arch }} tools
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: >
-        gh release download 6/${{ matrix.arch }} --pattern ${{ matrix.arch }}-rtems6.tar.xz
-        --repo "$GITHUB_REPOSITORY" || true
-    - uses: ./.github/actions/rsb-setup
-      if: hashFiles(format('{0}-rtems6.tar.xz', matrix.arch)) == ''
-      with:
-        repository: thelunatic/rtems-source-builder
-        ref: 6_update_rtems
-    - name: Create /opt/rtems/6
-      if: hashFiles(format('{0}-rtems6.tar.xz', matrix.arch)) == ''
-      run: |
-        sudo mkdir -p /opt/rtems/6
-        sudo chown $(id -u):$(id -g) /opt/rtems/6
-    - name: Build ${{ matrix.arch }} tools
-      if: hashFiles(format('{0}-rtems6.tar.xz', matrix.arch)) == ''
-      working-directory: rtems-source-builder/rtems
-      run: ../source-builder/sb-set-builder --prefix=/opt/rtems/6 6/rtems-${{ matrix.arch }}
-    - uses: actions/upload-artifact@v7
-      if: failure()
-      with:
-        name: rsb-report ${{ matrix.arch }}-rtems6
-        path: rtems-source-builder/rtems/rsb-report-*.txt
-    - name: Show compiler version
-      if: hashFiles(format('{0}-rtems6.tar.xz', matrix.arch)) == ''
-      run: /opt/rtems/6/bin/${{ matrix.arch }}-rtems6-gcc --version
-    - name: Pack toolchain
-      if: hashFiles(format('{0}-rtems6.tar.xz', matrix.arch)) == ''
-      run: tar -C / -cJf ${{ matrix.arch }}-rtems6.tar.xz opt/rtems/6
-    - uses: actions/upload-artifact@v7
-      with:
-        name: ${{ matrix.arch }}-rtems6.tar.xz
-        path: ${{ matrix.arch }}-rtems6.tar.xz
-    - name: Release ${{ matrix.arch }} tools
-      if: github.ref == 'refs/heads/main'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        if ! gh release view 6/${{ matrix.arch }} --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-          gh release create 6/${{ matrix.arch }} ${{ matrix.arch }}-rtems6.tar.xz \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
-        fi
+    with:
+      arch: i386
 
-  build-bsp:
-    name: RTEMS 6 ${{ matrix.arch }}/${{ matrix.bsp }} BSP
-    needs: build-rtems
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+  build-rtems-powerpc:
+    uses: ./.github/workflows/rtems-6-arch.yml
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: i386
-            bsp: pc686
-            cross: RTEMS-pc686-qemu@6
-          - arch: powerpc
-            bsp: beatnik
-            cross: RTEMS-beatnik@6
-            test: NO
-          - arch: arm
-            bsp: xilinx_zynq_a9_qemu
-            cross: RTEMS-xilinx_zynq_a9_qemu@6
-            test: NO
-          - arch: m68k
-            bsp: uC5282
-            cross: RTEMS-uC5282@6
-            test: NO
-          - arch: powerpc
-            bsp: mvme2100
-            cross: RTEMS-mvme2100@6
-            test: NO
-          - arch: powerpc
-            bsp: mvme2700
-            cross: RTEMS-mvme2700@6
-            test: NO
-          - arch: powerpc
-            bsp: mvme5100
-            cross: RTEMS-mvme5100@6
-            test: NO
-          - arch: powerpc
-            bsp: mvme3100
-            cross: RTEMS-mvme3100@6
-            test: NO
-    env:
-      RSB_REPOURL: ${{ github.server_url }}/${{ github.repository }}
-      RSB_BUILD: ${{ matrix.arch }}-${{ matrix.bsp }}
-    steps:
-    - uses: actions/checkout@v7
-      with:
-        submodules: true
-    - uses: ./.github/actions/rsb-setup
-      if: github.event_name != 'push'
-      with:
-        repository: thelunatic/rtems-source-builder
-        ref: 6_update_rtems
-    - uses: actions/download-artifact@v7
-      if: github.event_name != 'push'
-      with:
-        name: ${{ matrix.arch }}-rtems6.tar.xz
-    - name: Install ${{ matrix.arch }} tools
-      if: github.event_name != 'push'
-      run: |
-        sudo tar -C / -xmJ -f ${{ matrix.arch }}-rtems6.tar.xz
-        sudo chown -R $(id -u):$(id -g) /opt/rtems/6
-    - name: Build ${{ matrix.bsp }} kernel
-      if: github.event_name != 'push'
-      working-directory: rtems-source-builder/rtems
-      run: >
-        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
-        --target=${{ matrix.arch }}-rtems6 --with-rtems-bsp=${{ matrix.arch }}/${{ matrix.bsp }} 6/rtems-kernel
-    - name: Build ${{ matrix.bsp }} libbsd
-      if: github.event_name != 'push' && matrix.arch != 'm68k'
-      working-directory: rtems-source-builder/rtems
-      run: >
-        ../source-builder/sb-set-builder --prefix=/opt/rtems/6
-        --target=${{ matrix.arch }}-rtems6 --with-rtems-bsp=${{ matrix.arch }}/${{ matrix.bsp }}
-        --log=rsb-libbsd.log 6/rtems-libbsd-fb14
-    - uses: actions/upload-artifact@v7
-      if: failure() && github.event_name != 'push'
-      with:
-        name: rsb-report ${{ matrix.bsp }}-rtems6
-        path: |
-          rtems-source-builder/rtems/rsb-report-*.txt
-          rtems-source-builder/rtems/rsb-libbsd.log
-    - name: Pack toolchain and BSP
-      if: github.event_name != 'push'
-      run: tar -C / -cJf ${{ matrix.bsp }}-rtems6.tar.xz opt/rtems/6
-    - uses: ./.github/actions/epics-base
-      with:
-        cross: ${{ matrix.cross }}
-        test: ${{ matrix.test }}
-    - name: Release ${{ matrix.arch }}/${{ matrix.bsp }}
-      if: github.ref == 'refs/heads/main' && github.event_name != 'push'
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        if gh release view 6/${{ matrix.arch }}-${{ matrix.bsp }} --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-          gh release delete 6/${{ matrix.arch }}-${{ matrix.bsp }} --cleanup-tag --yes --repo "$GITHUB_REPOSITORY"
-        fi
-        gh release create 6/${{ matrix.arch }}-${{ matrix.bsp }} ${{ matrix.bsp }}-rtems6.tar.xz \
-          --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
+    with:
+      arch: powerpc
+
+  build-rtems-arm:
+    uses: ./.github/workflows/rtems-6-arch.yml
+    permissions:
+      contents: write
+    with:
+      arch: arm
+
+  build-rtems-m68k:
+    uses: ./.github/workflows/rtems-6-arch.yml
+    permissions:
+      contents: write
+    with:
+      arch: m68k
+
+  build-bsp-pc686:
+    needs: build-rtems-i386
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: i386
+      bsp: pc686
+      cross: RTEMS-pc686-qemu@6
+
+  build-bsp-beatnik:
+    needs: build-rtems-powerpc
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: powerpc
+      bsp: beatnik
+      cross: RTEMS-beatnik@6
+      test: NO
+
+  build-bsp-xilinx_zynq_a9_qemu:
+    needs: build-rtems-arm
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: arm
+      bsp: xilinx_zynq_a9_qemu
+      cross: RTEMS-xilinx_zynq_a9_qemu@6
+      test: NO
+
+  build-bsp-uC5282:
+    needs: build-rtems-m68k
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: m68k
+      bsp: uC5282
+      cross: RTEMS-uC5282@6
+      test: NO
+
+  build-bsp-mvme2100:
+    needs: build-rtems-powerpc
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: powerpc
+      bsp: mvme2100
+      cross: RTEMS-mvme2100@6
+      test: NO
+
+  build-bsp-mvme2700:
+    needs: build-rtems-powerpc
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: powerpc
+      bsp: mvme2700
+      cross: RTEMS-mvme2700@6
+      test: NO
+
+  build-bsp-mvme5100:
+    needs: build-rtems-powerpc
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: powerpc
+      bsp: mvme5100
+      cross: RTEMS-mvme5100@6
+      test: NO
+
+  build-bsp-mvme3100:
+    needs: build-rtems-powerpc
+    uses: ./.github/workflows/rtems-6-bsp.yml
+    permissions:
+      contents: write
+    with:
+      arch: powerpc
+      bsp: mvme3100
+      cross: RTEMS-mvme3100@6
+      test: NO
